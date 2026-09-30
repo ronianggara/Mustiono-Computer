@@ -116,5 +116,6 @@ function expAll(){const wb=XLSX.utils.book_new();sh(wb,'Perusahaan',[DB.settings
 function expLap(){const wb=XLSX.utils.book_new(),S=R.S||[];sh(wb,'Transaksi',S.map(({items,...r})=>({...r,laba:laba({items})})));sh(wb,'Detail',S.flatMap(s=>s.items.map(i=>({trx:s.id,produk:i.nama,qty:i.qty,harga:i.harga,modal:i.modal,subtotal:i.qty*i.harga}))));saveX(wb,`laporan-${R.a}_${R.b}.xlsx`)}
 function impX(f){if(!f)return;const r=new FileReader();r.onload=e=>ask('Impor akan MENGGANTI seluruh data saat ini. Lanjutkan?',()=>{try{const wb=XLSX.read(e.target.result,{type:'array'}),g=n=>wb.Sheets[n]?XLSX.utils.sheet_to_json(wb.Sheets[n]):[];const D={settings:g('Perusahaan')[0]||DB.settings,users:g('Pengguna'),products:g('Produk'),stocklog:g('LogStok'),sales:[]};if(!D.users.some(u=>u.role=='admin'))throw 0;const det=g('DetailTransaksi');D.sales=g('Transaksi').map(s=>({...s,items:det.filter(d=>d.trx==s.id).map(({trx,...i})=>i)}));DB=D;save();ME=null;toast('Impor berhasil, silakan masuk kembali');login()}catch(x){toast('File tidak valid (harus ada akun admin & sheet yang sesuai)')}});r.readAsArrayBuffer(f)}
 load();login();
-</script></body>
+</script>
+</body>
 </html>
