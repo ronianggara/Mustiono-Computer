@@ -70,5 +70,7 @@ URL server tersimpan di perangkat itu saja (localStorage). Kalau ingin URL perma
 - **Pesan "Tidak bisa menghubungi server"** → biasanya akses Web App belum diset **Anyone**, atau URL bukan yang berakhiran `/exec`.
 - **Scan kamera** → perlu situs HTTPS (GitHub Pages sudah HTTPS otomatis) dan izin kamera browser.
 - **Printer** → mode *dialog print browser* mendukung semua printer; mode Bluetooth/Serial (thermal) perlu Chrome di HP/Laptop.
+- **Printer Bluetooth (mode langsung)** → perangkat terakhir **disimpan otomatis**, cetak berikutnya langsung terkirim tanpa pilih ulang. Ganti perangkat lewat tombol **"Ganti printer"** di jendela cetak.
+- **Keamanan URL server** → di halaman login URL ditampilkan **tersensor** (contoh: `…/s/AKfycbTE••••••••qrst/exec`). Saat mengganti koneksi, kotak input selalu **kosong** — URL lama tidak pernah ditampilkan; kosongkan lalu OK untuk menghapus koneksi.
 - **Update tampilan** → upload ulang `index.html` ke GitHub (Commit) — tanpa perlu deploy ulang Apps Script.
 - **Ganti password default & tambah kasir** lewat menu **Setting Akun**.

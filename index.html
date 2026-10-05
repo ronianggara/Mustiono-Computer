@@ -478,7 +478,8 @@ tr:hover td{background:#f8fafc}
       <option value="115200">115200</option>
     </select>
   </div>
-  <button class="btn" style="width:100%;padding:16px;font-size:15px;background:#3b82f6;color:#fff" onclick="runDirectPrint()">🔗 Pilih Printer &amp; Cetak</button>
+  <button class="btn" id="print-main-btn" style="width:100%;padding:16px;font-size:15px;background:#3b82f6;color:#fff" onclick="runDirectPrint()">🔗 Pilih Printer &amp; Cetak</button>
+  <button class="btn-outline btn-sm" id="print-change-bt" style="width:100%;margin-top:8px;display:none" onclick="runDirectPrint(true)">🔄 Ganti printer Bluetooth</button>
   <div id="print-status" class="center small" style="color:#94a3b8;padding:16px 8px;line-height:1.5">Siap.</div>
   <p class="center small" style="color:#64748b;line-height:1.5">Izinkan akses perangkat saat browser meminta.<br>Setelah data terkirim, jendela ini menutup sendiri.</p>
 </div>
@@ -511,11 +512,11 @@ function apiUrl() {
 }
 function setupServerUrl(ev) {
   if (ev) ev.preventDefault();
-  var cur = apiUrl();
-  var url = window.prompt('Tempel URL Web App Apps Script (diakhiri /exec):', cur || 'https://script.google.com/macros/s/xxxxx/exec');
+  // Demi keamanan: URL lama TIDAK ditampilkan di kotak input — mulai selalu kosong.
+  var url = window.prompt('Demi keamanan, URL server lama tidak ditampilkan.\nTempel URL Web App Apps Script (diakhiri /exec) untuk mengganti,\natau kosongkan lalu OK untuk menghapus koneksi:', '');
   if (url === null) return;
   url = url.trim();
-  if (!url) { try { localStorage.removeItem('mcp_api_url'); } catch(e){} updateServerStatus(); return; }
+  if (!url) { try { localStorage.removeItem('mcp_api_url'); } catch(e){} updateServerStatus(); toast('Koneksi server dihapus.', 'ok'); return; }
   if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(url)) {
     if (!confirm('URL sepertinya bukan URL Web App (/exec). Simpan tetap?')) return;
   }
@@ -523,11 +524,17 @@ function setupServerUrl(ev) {
   updateServerStatus();
   toast('URL server disimpan.', 'ok');
 }
+function maskApiUrl(u) {
+  var m = String(u).match(/^https:\/\/script\.google\.com\/macros\/s\/([^\/?#]+)(\/exec)?$/);
+  var id = m ? m[1] : String(u);
+  var mid = id.length > 12 ? id.substring(0, 8) + '••••••••' + id.substring(id.length - 4) : '••••••';
+  return m ? ('…/s/' + mid + (m[2] ? '/exec' : '')) : mid;
+}
 function updateServerStatus() {
   var el = document.getElementById('server-status');
   if (!el) return;
   var u = apiUrl();
-  el.textContent = u ? ('Server: ' + u.replace(/^https:\/\/script\.google\.com\/macros\/s\//, '…/s/')) : '⚠ Server belum diatur — klik di sini untuk mengisi URL Web App';
+  el.textContent = u ? ('🔒 Server: ' + maskApiUrl(u) + ' (terhubung)') : '⚠ Server belum diatur — klik di sini untuk mengisi URL Web App';
 }
 function apiPost(action, payload, token) {
   var url = apiUrl();
@@ -1507,9 +1514,18 @@ function enterPrintMode() {
   if (app) app.style.display = 'none';
   var baudBox = document.getElementById('print-baud-box');
   if (baudBox) baudBox.style.display = (PRINT_METHOD === 'serial') ? 'block' : 'none';
-  setPrintStatus(PRINT_METHOD === 'serial'
-    ? 'Siap. Klik tombol untuk memilih port USB/Serial printer.'
-    : 'Siap. Klik tombol untuk memilih printer Bluetooth.');
+  var chg = document.getElementById('print-change-bt');
+  if (chg) chg.style.display = (PRINT_METHOD === 'bluetooth') ? 'block' : 'none';
+  var sv = (PRINT_METHOD === 'bluetooth') ? savedBtDevice() : null;
+  var mb = document.getElementById('print-main-btn');
+  if (mb) mb.textContent = sv ? ('🖨️ Cetak ke printer terakhir (' + (sv.name || 'printer') + ')') : '🔗 Pilih Printer & Cetak';
+  if (PRINT_METHOD === 'serial') {
+    setPrintStatus('Siap. Klik tombol untuk memilih port USB/Serial printer.');
+  } else if (sv) {
+    setPrintStatus('Siap. Klik tombol cetak — langsung terkirim tanpa pilih ulang. Klik "Ganti printer" untuk mengganti perangkat.');
+  } else {
+    setPrintStatus('Siap. Klik tombol untuk memilih printer Bluetooth (perangkat akan diingat untuk cetak berikutnya).');
+  }
 }
 function setPrintStatus(msg, isErr, isOk) {
   var el = document.getElementById('print-status');
@@ -1520,12 +1536,12 @@ function setPrintStatus(msg, isErr, isOk) {
 function readPrintJob() {
   try { return JSON.parse(localStorage.getItem('mcp_print_job') || 'null'); } catch(e) { return null; }
 }
-function runDirectPrint() {
+function runDirectPrint(forcePicker) {
   var job = readPrintJob();
   if (!job) { setPrintStatus('Data cetak tidak ditemukan — ulangi dari halaman kasir.', true); return; }
   var bytes = buildEscposFromLines(job.lines || [], job.paper);
   if (PRINT_METHOD === 'serial') printSerial(bytes);
-  else printBluetooth(bytes);
+  else printBluetooth(bytes, forcePicker);
 }
 function notifyPrintDone() {
   var payload = { mcpPrint: true, ok: true, t: Date.now() };
@@ -1543,13 +1559,45 @@ function sendChunked(ch, bytes) {
   }
   return next();
 }
-function printBluetooth(bytes) {
-  if (!navigator.bluetooth) {
-    setPrintStatus('Web Bluetooth tidak didukung browser ini. Pakai Android/Chrome atau desktop Chrome/Edge, atau gunakan metode Dialog Print Browser.', true);
-    return;
-  }
+function btFindWriteChar(services) {
+  var writeChar = null;
+  return services.reduce(function(chain, svc) {
+    return chain.then(function() {
+      return svc.getCharacteristics().then(function(chars) {
+        chars.forEach(function(ch) {
+          if (writeChar) return;
+          var p = ch.properties;
+          if (p && (p.write || p.writeWithoutResponse)) writeChar = ch;
+        });
+      });
+    });
+  }, Promise.resolve()).then(function() {
+    if (!writeChar) throw new Error('Printer tidak punya characteristic yang bisa ditulisi');
+    return writeChar;
+  });
+}
+function btSend(dev, bytes) {
+  setPrintStatus('Menghubungkan ke ' + (dev.name || 'printer') + '…');
+  return dev.gatt.connect().then(function(server) { return server.getPrimaryServices(); })
+    .then(function(services) { return btFindWriteChar(services); })
+    .then(function(ch) {
+      setPrintStatus('Mengirim data cetak…');
+      return sendChunked(ch, bytes);
+    })
+    .then(function() { try { if (dev.gatt.connected) dev.gatt.disconnect(); } catch(e) {} });
+}
+function savedBtDevice() {
+  try { return JSON.parse(localStorage.getItem('mcp_bt_device') || 'null'); } catch(e) { return null; }
+}
+function rememberBtDevice(dev) {
+  try { localStorage.setItem('mcp_bt_device', JSON.stringify({ id: dev.id || '', name: dev.name || '' })); } catch(e) {}
+}
+function forgetBtDevice() {
+  try { localStorage.removeItem('mcp_bt_device'); } catch(e) {}
+}
+function btPickAndSend(bytes) {
   setPrintStatus('Meminta perangkat Bluetooth… (pilih printer Anda)');
-  navigator.bluetooth.requestDevice({
+  return navigator.bluetooth.requestDevice({
     acceptAllDevices: true,
     optionalServices: [
       '000018f0-0000-1000-8000-00805f9b34fb',
@@ -1558,27 +1606,36 @@ function printBluetooth(bytes) {
       '0000ff00-0000-1000-8000-00805f9b34fb'
     ]
   }).then(function(dev) {
-    setPrintStatus('Menghubungkan ke ' + (dev.name || 'printer') + '…');
-    return dev.gatt.connect().then(function(server) { return server.getPrimaryServices(); });
-  }).then(function(services) {
-    var writeChar = null;
-    return services.reduce(function(chain, svc) {
-      return chain.then(function() {
-        return svc.getCharacteristics().then(function(chars) {
-          chars.forEach(function(ch) {
-            if (writeChar) return;
-            var p = ch.properties;
-            if (p && (p.write || p.writeWithoutResponse)) writeChar = ch;
-          });
-        });
+    rememberBtDevice(dev); // ingat perangkat ini utk cetak berikutnya
+    return btSend(dev, bytes);
+  });
+}
+function printBluetooth(bytes, forcePicker) {
+  if (!navigator.bluetooth) {
+    setPrintStatus('Web Bluetooth tidak didukung browser ini. Pakai Android/Chrome atau desktop Chrome/Edge, atau gunakan metode Dialog Print Browser.', true);
+    return;
+  }
+  var saved = forcePicker ? null : savedBtDevice();
+  var start = Promise.resolve(null);
+  if (saved && typeof navigator.bluetooth.getDevices === 'function') {
+    start = navigator.bluetooth.getDevices().then(function(devs) {
+      var dev = null;
+      devs.forEach(function(d) {
+        if (dev) return;
+        if ((saved.id && d.id === saved.id) || (!saved.id && d.name === saved.name)) dev = d;
       });
-    }, Promise.resolve()).then(function() {
-      if (!writeChar) throw new Error('Printer tidak punya characteristic yang bisa ditulisi');
-      return writeChar;
+      return dev;
     });
-  }).then(function(ch) {
-    setPrintStatus('Mengirim data cetak…');
-    return sendChunked(ch, bytes);
+  }
+  start.then(function(dev) {
+    if (dev) {
+      setPrintStatus('Memakai printer terakhir: ' + (dev.name || saved.name || 'printer') + '…');
+      return btSend(dev, bytes).catch(function() {
+        setPrintStatus('Printer terakhir tidak terjangkau — silakan pilih ulang…');
+        return btPickAndSend(bytes);
+      });
+    }
+    return btPickAndSend(bytes);
   }).then(function() {
     setPrintStatus('✓ Data terkirim ke printer.', false, true);
     notifyPrintDone();
@@ -1795,7 +1852,7 @@ function renderReceiptSettings() {
 }
 var PRINT_METHOD_HINTS = {
   browser: 'Nota dicetak lewat <b>dialog print browser</b>. Cara paling universal: mendukung printer thermal USB, jaringan/WiFi, PDF, dan <b>printer Bluetooth yang sudah di-pair ke HP/laptop</b> (di Android pilih printer Bluetooth pada daftar print). Tidak perlu izin khusus.',
-  bluetooth: 'Kirim perintah <b>ESC/POS langsung ke printer Bluetooth (BLE)</b> tanpa dialog print. Dibuka di jendela terpisah agar dapat izin Bluetooth. Catatan: hanya jalan di <b>Android/Chrome & desktop Chrome/Edge</b> (tidak didukung iPhone/iPad), dan khusus printer yang mendukung BLE. Printer Bluetooth lawas (SPP klasik) tidak terdeteksi — gunakan metode Dialog Print Browser. Logo tidak ikut tercetak pada mode langsung.',
+  bluetooth: 'Kirim perintah <b>ESC/POS langsung ke printer Bluetooth (BLE)</b> tanpa dialog print. Dibuka di jendela terpisah agar dapat izin Bluetooth. Catatan: hanya jalan di <b>Android/Chrome & desktop Chrome/Edge</b> (tidak didukung iPhone/iPad), dan khusus printer yang mendukung BLE. Printer Bluetooth lawas (SPP klasik) tidak terdeteksi — gunakan metode Dialog Print Browser. Logo tidak ikut tercetak pada mode langsung. <b>Perangkat terakhir disimpan</b>: cetak berikutnya langsung terkirim tanpa pilih ulang (tombol "Ganti printer" untuk mengganti perangkat).',
   serial: 'Kirim perintah <b>ESC/POS langsung ke printer USB/Serial</b> lewat Web Serial. Hanya di <b>Chrome/Edge desktop</b>. Pilih baud rate yang sesuai printer (umumnya 9600). Logo tidak ikut tercetak pada mode langsung.'
 };
 function onPrintMethodChange() {
